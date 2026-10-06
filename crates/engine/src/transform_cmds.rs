@@ -241,20 +241,71 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, l: &mut Layer, h: &Homo
     Ok(())
 }
 
-/// A ⌘-drag of the selection shown live: `doc` with the selected pixels of `layer` cut and
-/// moved by whole pixels (dx, dy), as `edit.transform` with that translation leaves them. The
-/// selection itself stays put (the canvas draws it at the pointer). Errors for layers without
-/// pixels.
-pub fn cut_moved(doc: &Document, layer: LayerId, dx: i32, dy: i32) -> Result<Document> {
-    let sel = doc.selection.clone().ok_or_else(|| EngineError::Other("no selection".into()))?;
-    let mut d = doc.clone();
-    let surf =
-        d.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?;
-    let (lifted, mut rest) = split_selected(surf, &sel);
-    composite_over(&mut rest, &photocraft_algo::resample::translate_surface(&lifted, dx, dy));
-    rest.prune();
-    *surf = rest;
-    Ok(d)
+/// A ⌘-drag of the selection, split once: `layer` with its selected pixels cut out, and the cut
+/// pixels. Splitting touches the whole layer, so a live drag does it once and then only places
+/// the piece ([`CutParts::moved`]) on each pointer move.
+#[derive(Clone, Debug)]
+pub struct CutParts {
+    pub layer: LayerId,
+    rest: Surface,
+    lifted: Surface,
+}
+
+impl CutParts {
+    /// Split `layer` of `doc` by its selection. Errors without a selection or pixels.
+    pub fn new(doc: &Document, layer: LayerId) -> Result<Self> {
+        let sel = doc.selection.as_ref().ok_or_else(|| EngineError::Other("no selection".into()))?;
+        let surf = doc.layer(layer).ok_or(EngineError::NoLayer(layer))?;
+        let surf = match &surf.content {
+            LayerContent::Raster(s) => s,
+            _ => return Err(EngineError::Other("the layer has no pixels to move".into())),
+        };
+        // Only the selection's bounds change: split just that area (the rest of the layer's
+        // tiles stay shared), so starting a drag costs the piece, not the layer.
+        let fmt = surf.format();
+        let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
+        let mut rest = if fmt == with_alpha { surf.clone() } else { surf.convert(with_alpha) };
+        let mut piece = Surface::new(with_alpha);
+        let b = sel.content_bounds().intersect(&surf.content_bounds());
+        if !b.is_empty() {
+            let n = with_alpha.channels();
+            let a = n - 1;
+            let mut rp = rest.read_region(b);
+            let mut lp = rp.clone();
+            let w = b.width() as usize;
+            for (i, (l, r)) in lp.chunks_exact_mut(n).zip(rp.chunks_exact_mut(n)).enumerate() {
+                let k = sel.sample_channel(b.x0 + (i % w) as i32, b.y0 + (i / w) as i32, 0);
+                if k <= 0.0 {
+                    l.fill(0.0);
+                } else {
+                    l[a] *= k;
+                }
+                r[a] *= 1.0 - k;
+            }
+            rest.write_region(b, &rp);
+            rest.prune();
+            piece.write_region(b, &lp);
+            piece.prune();
+        }
+        Ok(Self { layer, rest, lifted: piece })
+    }
+
+    /// `doc` with the cut piece moved by whole pixels (dx, dy), as `edit.transform` with that
+    /// translation leaves it. The selection itself stays put (the canvas draws it at the
+    /// pointer). Costs the piece's size, not the layer's: the tiles of the cut-out layer are
+    /// shared, and only those under the moved piece are written.
+    pub fn moved(&self, doc: &Document, dx: i32, dy: i32) -> Result<Document> {
+        let mut d = doc.clone();
+        let surf = d
+            .layer_mut(self.layer)
+            .ok_or(EngineError::NoLayer(self.layer))?
+            .surface_mut()
+            .ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?;
+        let mut out = self.rest.clone();
+        composite_over(&mut out, &photocraft_algo::resample::translate_surface(&self.lifted, dx, dy));
+        *surf = out;
+        Ok(d)
+    }
 }
 
 /// Split a layer surface by a selection: (selected pixels, everything else), both with alpha.
@@ -678,5 +729,58 @@ mod tests {
         let mut sel = Surface::new(PixelFormat::GRAY8);
         sel.fill_rect(Rect::new(0, 0, 4, 4), &[1.0]);
         assert!(split_gray_selected(&s, &sel).is_none());
+    }
+}
+
+#[cfg(test)]
+mod cut_parts_tests {
+    use super::*;
+
+    fn session(w: i32, h: i32) -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, w, h), &[0.2, 0.4, 0.6, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s
+    }
+
+    /// Placing the piece matches `edit.transform` with the same translation.
+    #[test]
+    fn moved_matches_the_committed_transform() {
+        let mut s = session(80, 60);
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 15})).unwrap();
+        let st = s.active().unwrap();
+        let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
+        let parts = CutParts::new(&doc, layer).unwrap();
+        let shown = parts.moved(&doc, 25, 12).unwrap();
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 25, 12], "interpolation": "nearest"})).unwrap();
+        let done = s.active().unwrap().doc.clone();
+        let (a, b) = (shown.layer(layer).unwrap().surface().unwrap(), done.layer(layer).unwrap().surface().unwrap());
+        for (x, y) in [(5, 5), (12, 12), (29, 24), (36, 23), (54, 36), (40, 40)] {
+            assert_eq!(a.rgba(x, y), b.rgba(x, y), "({x}, {y})");
+        }
+    }
+
+    /// `cargo test --release -p photocraft-engine cut_drag_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn cut_drag_bench() {
+        let mut s = session(6000, 4000);
+        s.execute("select.rect", json!({"x": 1000, "y": 1000, "width": 500, "height": 400})).unwrap();
+        let st = s.active().unwrap();
+        let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
+        let t = std::time::Instant::now();
+        let parts = CutParts::new(&doc, layer).unwrap();
+        let split = t.elapsed();
+        let t = std::time::Instant::now();
+        for i in 0..20 {
+            parts.moved(&doc, i * 7, i * 3).unwrap();
+        }
+        let per_move = t.elapsed() / 20;
+        eprintln!("6000×4000 layer, 500×400 piece: split once {split:?}, then {per_move:?} per pointer move (was split + place every move)");
     }
 }

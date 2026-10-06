@@ -26,8 +26,8 @@ pub(crate) struct MovePreview {
     /// The document at the latest offset.
     shown: Option<Arc<Document>>,
     /// A ⌘-drag of the selection with a selection tool: the selected pixels of `ids[0]` are cut
-    /// and follow the pointer ([`photocraft_engine::transform_cmds::cut_moved`]).
-    cut: bool,
+    /// and follow the pointer: the layer split once into the cut-out layer and the piece.
+    cut: Option<Arc<photocraft_engine::transform_cmds::CutParts>>,
 }
 
 impl MovePreview {
@@ -79,7 +79,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     let cut = floating.is_some() || app.drag.as_ref().is_some_and(|d| d.sel_move == Some(true));
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
-    let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision && p.cut == cut);
+    let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision && p.cut.is_some() == cut);
     if !fresh {
         let (ids, bounds) = if cut {
             // Only the selected pixels of the active layer move: they change only inside the
@@ -93,7 +93,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         if ids.is_empty() {
             return None;
         }
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, bounds, offsets: Vec::new(), shown: None, cut });
+        // The split costs the whole layer: once per drag (and per floating piece), not per move.
+        let parts = match cut {
+            true => Some(Arc::new(photocraft_engine::transform_cmds::CutParts::new(&doc, ids[0]).ok()?)),
+            false => None,
+        };
+        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, bounds, offsets: Vec::new(), shown: None, cut: parts });
     }
     let p = app.move_preview.as_mut()?;
     if offset == (0, 0) && p.offsets.is_empty() {
@@ -101,8 +106,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     if p.offsets.last() != Some(&offset) {
         let t0 = crate::gpu_canvas::now_ms();
-        let moved = if p.cut {
-            photocraft_engine::transform_cmds::cut_moved(&doc, p.ids[0], offset.0, offset.1)
+        let moved = if let Some(parts) = &p.cut {
+            parts.moved(&doc, offset.0, offset.1)
         } else {
             photocraft_engine::layer_multi_cmds::moved(&doc, &p.ids, offset.0, offset.1)
         };
