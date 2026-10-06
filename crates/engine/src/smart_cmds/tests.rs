@@ -271,6 +271,8 @@ fn edit_contents_updates_the_parent() {
     let r = s.execute("layer.smartObjects.editContents", json!({})).unwrap();
     let child = r["document"].as_u64().unwrap() as usize;
     assert_eq!(s.active_index(), Some(child));
+    let layer_name = s.documents()[0].doc.layer(photocraft_doc::LayerId(id)).unwrap().name.clone();
+    assert_eq!(s.active().unwrap().doc.name, format!("{layer_name}.psb"));
     assert!(s.is_enabled("layer.smartObjects.saveContents"));
     // Paint the nested document's layer solid red.
     s.edit("paint", |doc, _| {

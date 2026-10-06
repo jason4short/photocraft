@@ -594,10 +594,12 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let parent = st.doc.id;
     let (name, bytes) = source_bytes(&st.doc.metadata, &smart(&st.doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    let layer_name = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?.name.clone();
     let mut child = decode_source(&name, &bytes)?;
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
-    child.name = name;
+    // Photoshop titles the contents window after the layer, as a .psb.
+    child.name = format!("{layer_name}.psb");
     let index = s.add_document(child, None);
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;

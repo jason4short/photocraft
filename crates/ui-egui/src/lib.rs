@@ -29,6 +29,7 @@ pub mod brush_sections;
 pub mod brushes_tab;
 pub mod camera_raw_ui;
 pub mod canvas;
+pub mod canvas_menu;
 pub mod channel_view;
 pub mod channels_panel;
 pub mod chrome_ui;
@@ -88,6 +89,7 @@ pub mod preset_panels;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
+pub mod quick_pick;
 pub mod rasterize_prompt;
 pub mod retouch_ui;
 pub mod rulers;
@@ -242,6 +244,8 @@ pub struct PhotocraftApp {
     last_stroke_end: Option<(DocId, [f64; 2])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
     pub(crate) brush_resize: Option<brush_resize::Resize>,
+    /// A ⌘⌥⌃-click layer pick is in progress; its drag and release are swallowed (`quick_pick`).
+    pub(crate) quick_pick: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
@@ -366,6 +370,7 @@ impl PhotocraftApp {
             defer_live_stroke: false,
             last_stroke_end: None,
             brush_resize: None,
+            quick_pick: false,
             control_rx: None,
             pending_screenshots: Vec::new(),
             queued_screenshots: Vec::new(),

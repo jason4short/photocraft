@@ -1300,6 +1300,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let xf = ViewXform { rect, zoom: view.zoom, center: view.center, flip };
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    // Pressing on the canvas takes the keyboard back from any field (a layer rename commits, as
+    // in Photoshop), so tool letters and other single-key shortcuts work again.
+    if response.is_pointer_button_down_on() && ui.input(|i| i.pointer.any_pressed()) {
+        ui.memory_mut(|m| {
+            if let Some(id) = m.focused() {
+                m.surrender_focus(id);
+            }
+        });
+    }
     let painter = ui.painter_at(rect);
 
     match crate::prefs_ui::pasteboard_color(app) {
@@ -1542,6 +1551,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_smoothing(app);
         let mut buttons = crate::paint_mouse::canvas_buttons(app, &response, tool);
+        // Right-click inside a selection: the selection context menu (canvas_menu.rs).
+        crate::canvas_menu::show(app, &response, tool, |p| xf.to_doc(p));
         // The (temporary) Hand pans above; its gestures never reach the tool underneath.
         if tool == Tool::Hand {
             (buttons.started, buttons.dragged, buttons.stopped) = (false, false, false);
@@ -1781,14 +1792,29 @@ fn zoom_about(view: &mut View, xf: &ViewXform, p: Pos2, new_zoom: f32) {
 
 /// Draw boundary segments as marching ants: white base, black dashes phased along x + y.
 fn marching_ants_segments(painter: &egui::Painter, xf: &ViewXform, segs: &[crate::outline::Segment], time: f64) {
+    let screen = segs.iter().map(|(a, b)| (xf.to_screen(a[0] as f32, a[1] as f32), xf.to_screen(b[0] as f32, b[1] as f32)));
+    marching_ants_screen(painter, screen, time);
+}
+
+/// A selection being drawn (marquee, lasso): the same ants as the finished selection, so the
+/// outline looks identical while dragging and after release.
+pub(crate) fn marching_ants_path(painter: &egui::Painter, points: &[Pos2], closed: bool) {
+    let ctx = painter.ctx();
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let time = ctx.input(|i| i.time);
+    let n = points.len();
+    let count = if closed && n > 2 { n } else { n.saturating_sub(1) };
+    marching_ants_screen(painter, (0..count).map(|i| (points[i], points[(i + 1) % n])), time);
+}
+
+/// Screen-space segments as marching ants: white base, black dashes phased along x + y.
+fn marching_ants_screen(painter: &egui::Painter, segs: impl Iterator<Item = (Pos2, Pos2)>, time: f64) {
     let dash = 4.0f32;
     let phase = ((time * 10.0) % (dash as f64 * 2.0)) as f32;
     let white = Stroke::new(1.0, Color32::WHITE);
     let black = Stroke::new(1.0, Color32::BLACK);
     let clip = painter.clip_rect();
-    for (a, b) in segs {
-        let pa = xf.to_screen(a[0] as f32, a[1] as f32);
-        let pb = xf.to_screen(b[0] as f32, b[1] as f32);
+    for (pa, pb) in segs {
         if !clip.intersects(Rect::from_two_pos(pa, pb).expand(1.0)) {
             continue;
         }
@@ -1877,7 +1903,7 @@ fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
         if let Some(h) = hover {
             pts.push(h);
         }
-        crate::tool_feedback::draw_ants(painter, &pts, false);
+        marching_ants_path(painter, &pts, false);
         for p in pts.iter().take(app.ui.polygon.len()) {
             painter.rect_filled(Rect::from_center_size(*p, vec2(5.0, 5.0)), 0.0, Color32::WHITE);
             painter.rect_stroke(Rect::from_center_size(*p, vec2(5.0, 5.0)), 0.0, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
@@ -1970,17 +1996,17 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             // Marching ants, visible on any pixels (#172).
             let (a, b) = marquee.unwrap_or((d.start, last));
             let r = Rect::from_two_pos(xf.to_screen(a[0] as f32, a[1] as f32), xf.to_screen(b[0] as f32, b[1] as f32));
-            let r = Rect::from_min_max(r.min.round() + vec2(0.5, 0.5), r.max.round() + vec2(0.5, 0.5));
+            // `marching_ants_path` snaps to the pixel grid itself, like the finished selection.
             let pts = if d.tool == Tool::EllipseMarquee {
                 crate::tool_feedback::ellipse_points(r)
             } else {
                 vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()]
             };
-            crate::tool_feedback::draw_ants(painter, &pts, true);
+            marching_ants_path(painter, &pts, true);
         }
         Tool::Lasso => {
             let pts: Vec<Pos2> = d.points.iter().map(|p| xf.to_screen(p[0] as f32, p[1] as f32)).collect();
-            crate::tool_feedback::draw_ants(painter, &pts, false);
+            marching_ants_path(painter, &pts, false);
         }
         Tool::Gradient => {
             let a = xf.to_screen(d.start[0] as f32, d.start[1] as f32);
@@ -2047,7 +2073,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
     let ev = crate::snap_ui::filter_event(app, ev, mods);
-    if crate::transform_tool::pointer(app, ev, mods) {
+    // Free Transform picks the handle under the press where the user clicked: the snapped press
+    // can land outside the corner's hit zone and turn a corner drag into a move of the whole box.
+    let transform_ev = if matches!(raw, ToolEvent::Down { .. }) { raw } else { ev };
+    if crate::transform_tool::pointer(app, transform_ev, mods) {
         return;
     }
     if crate::distort_ui::pointer(app, ev, mods) {
@@ -2055,6 +2084,11 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     // Window › Modifier Keys: sticky Shift/⌘/⌥ act as held keys.
     let mods = crate::workspace_ui::sticky_mods(app, mods);
+    // ⌘⌥⌃-click with any tool selects the topmost layer with pixels there (quick_pick.rs); it
+    // must run before the ⌃⌥ brush resize below, which the same keys would trigger.
+    if crate::quick_pick::pointer(app, ev, mods) {
+        return;
+    }
     // Control+Alt-drag with a painting tool resizes the brush instead of painting (#231).
     if crate::brush_resize::pointer(app, ev, mods) {
         return;

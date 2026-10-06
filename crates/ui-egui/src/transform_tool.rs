@@ -1,7 +1,8 @@
 //! Free Transform (⌘T): bounding box with handles over the canvas, live preview, commit via the
 //! engine's `edit.transform` (one quad for scale/rotate/skew/distort/perspective).
 //!
-//! Gestures follow Photoshop CC: corner drag scales proportionally (⇧ for free), edges scale one
+//! Gestures follow Photoshop's legacy Free Transform: corner drag stretches freely (⇧ keeps the
+//! proportions), edges scale one
 //! axis, ⌥ scales about the reference point, ⌘-drag a corner distorts (⌘⌥⇧: perspective), ⌘-drag
 //! an edge skews (⇧ along the edge), drag outside rotates (⇧ snaps to 15°), drag inside moves
 //! (⇧ locks to 8 directions), the reference point can be dragged and ⌥-click puts it under the
@@ -17,7 +18,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::TransformSession;
+use crate::state::{TransformMode, TransformSession};
 
 /// Preview state that isn't serialisable: the document without the transformed pixels, and
 /// full-resolution textures of those pixels (transform_tex.rs).
@@ -85,6 +86,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         warp: None,
         selection: false,
         target: None,
+        mode: Default::default(),
     });
     Ok(())
 }
@@ -138,6 +140,7 @@ fn begin_lone(
         warp: None,
         selection: false,
         target: Some(target),
+        mode: Default::default(),
     });
     Ok(())
 }
@@ -181,6 +184,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         warp: None,
         selection: true,
         target: None,
+        mode: Default::default(),
     });
     Ok(())
 }
@@ -408,11 +412,26 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 pv.gesture = None;
             }
             if let (Some(g), Some(s)) = (g, app.ui.transform.as_mut()) {
-                apply_drag(s, g, [x, y], mods);
+                apply_drag(s, g, [x, y], mode_mods(t.mode, g.hit, mods));
             }
         }
     }
     true
+}
+
+/// Skew / Distort / Perspective modes: a handle drag acts as if that gesture's keys were held
+/// (⌘-drag an edge skews, ⌘-drag a corner distorts, ⌘⌥⇧-drag a corner adds perspective).
+fn mode_mods(mode: TransformMode, hit: Hit, mut mods: egui::Modifiers) -> egui::Modifiers {
+    match (mode, hit) {
+        (TransformMode::Skew, Hit::Edge(_)) | (TransformMode::Distort, Hit::Corner(_) | Hit::Edge(_)) => mods.command = true,
+        (TransformMode::Perspective, Hit::Corner(_)) => {
+            mods.command = true;
+            mods.alt = true;
+            mods.shift = true;
+        }
+        _ => {}
+    }
+    mods
 }
 
 fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Modifiers) {
@@ -539,9 +558,9 @@ fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Mod
                     r[1] = 2.0 * pv - r[3];
                 }
             }
-            // Corners scale proportionally by default (Photoshop CC); ⇧ frees them.
+            // Corners stretch freely; ⇧ keeps the proportions (legacy Free Transform).
             let corner = matches!(g.hit, Hit::Corner(_));
-            if corner && !mods.shift {
+            if corner && mods.shift {
                 let (sx, sy) = (r[2] - r[0], r[3] - r[1]);
                 let k = if sx.abs() > sy.abs() { sx.abs() } else { sy.abs() };
                 let (nx, ny) = (k * sx.signum(), k * sy.signum());
@@ -1000,6 +1019,7 @@ mod tests {
             warp: None,
             selection: false,
             target: None,
+            mode: Default::default(),
         }
     }
 
@@ -1013,13 +1033,13 @@ mod tests {
     }
 
     #[test]
-    fn corner_drag_scales_proportionally_about_opposite_corner() {
+    fn corner_drag_stretches_and_shift_keeps_proportions() {
         let mut s = session();
         drag(&mut s, [100.0, 50.0], [200.0, 60.0], egui::Modifiers::NONE);
-        assert!(close(s.quad, corners([0.0, 0.0, 200.0, 100.0])), "{:?}", s.quad);
+        assert!(close(s.quad, corners([0.0, 0.0, 200.0, 60.0])), "free: {:?}", s.quad);
         let mut s = session();
         drag(&mut s, [100.0, 50.0], [200.0, 60.0], egui::Modifiers::SHIFT);
-        assert!(close(s.quad, corners([0.0, 0.0, 200.0, 60.0])), "shift = free: {:?}", s.quad);
+        assert!(close(s.quad, corners([0.0, 0.0, 200.0, 100.0])), "shift = proportional: {:?}", s.quad);
     }
 
     #[test]
