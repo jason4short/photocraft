@@ -61,6 +61,7 @@ pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
+pub mod lasso_ui;
 pub mod layer_menu_ui;
 pub mod layer_pick_ui;
 pub mod layer_props_ui;
@@ -112,6 +113,7 @@ pub mod stroke_trail;
 pub mod stylus;
 mod tab_strip;
 pub mod theme;
+pub mod tiff_options_ui;
 mod timeline_ui;
 pub mod tone;
 pub mod tool_feedback;
@@ -143,10 +145,22 @@ pub use state::{Tool, UiState};
 /// Decode a file: (document, warnings about anything approximated or dropped).
 pub type ImportFn = Box<dyn Fn(&str, &[u8]) -> Result<(Document, Vec<String>), String>>;
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
+    /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
+    pub tiff_layers: bool,
+    /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
+    /// Export As starts at Metadata: None, since the packet can carry the text of every type
+    /// layer and one id per placed document (#647).
+    pub xmp_all: bool,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        ExportSettings { jpeg_quality: None, tiff_layers: true, xmp_all: true }
+    }
 }
 
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
@@ -222,6 +236,10 @@ pub struct Services {
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_command: Option<AutomationCommandFn>,
+    /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
+    /// each step of `actions.play`. Installed on the session only while a control request or
+    /// an automation-driven [`PhotocraftApp::run`] runs, so a local play of a recorded `file.*` step still works.
+    pub automation_authorize: Option<fn(&str, &serde_json::Value) -> photocraft_engine::Result<()>>,
     /// Encode an RGBA8 image as PNG (used for screenshots and `ui.render`).
     pub encode_png: Option<EncodePngFn>,
     /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.
@@ -385,6 +403,8 @@ pub struct PhotocraftApp {
     pub(crate) prefs_rt: prefs_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,
+    /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
+    pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).
@@ -467,6 +487,7 @@ impl PhotocraftApp {
             perf: Default::default(),
             prefs_rt: Default::default(),
             discard: None,
+            tiff_options: None,
             allow_close: false,
             stylus: Default::default(),
             background_jobs: false,
@@ -539,6 +560,19 @@ impl PhotocraftApp {
 
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Automation input also gates every step a command runs on its behalf (`actions.play`).
+        let gate = if self.automation_input && self.session.authorize.is_none() { self.services.automation_authorize } else { None };
+        if gate.is_some() {
+            self.session.authorize = gate;
+        }
+        let result = self.run_command(id, params);
+        if gate.is_some() {
+            self.session.authorize = None;
+        }
+        result
+    }
+
+    fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let clip_read = std::mem::take(&mut self.clip_read_for_paste);
         if self.automation_input
             && let Some(authorize) = self.services.automation_command.as_ref()
@@ -594,6 +628,7 @@ impl PhotocraftApp {
 
     /// Keep one view per document.
     pub fn sync_views(&mut self) {
+        crate::lasso_ui::cancel_stale(self);
         let n = self.session.documents().len();
         self.ui.views.resize_with(n, Default::default);
         self.ui.windows.retain(|w| w.document < n);
@@ -746,8 +781,21 @@ impl PhotocraftApp {
             Some(p) => p,
             None => self.services.pick_save.as_mut().and_then(|f| f(&suggested)).ok_or("cancelled")?,
         };
+        // A layered TIFF asks about its layers first (Preferences › File Handling); the save
+        // continues from the prompt.
+        if tiff_options_ui::wants_prompt(self, &path) {
+            tiff_options_ui::park(self, path.clone());
+            return Ok((path, Vec::new()));
+        }
+        self.write_document(path, &ExportSettings::default())
+    }
+
+    /// Encodes the active document with `settings` and writes it to `path`, which becomes the
+    /// document's path. Returns the path and the export warnings (also shown to the user).
+    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings) -> Result<(String, Vec<String>), String> {
+        let st = self.session.active().ok_or("no document")?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&st.doc, &path, &ExportSettings::default())?;
+        let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         if let Some(st) = self.session.active_mut() {
@@ -965,6 +1013,7 @@ impl eframe::App for PhotocraftApp {
         dialogs::show(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
+        tiff_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
