@@ -904,14 +904,22 @@ pub fn search_rank(query: &str, label: &str, path: &[String]) -> Option<u8> {
     }
 }
 
-/// Menu items matching `query`, best first (Photoshop order within a rank).
-pub fn search_items<'a>(items: &'a [MenuItem], query: &str) -> Vec<&'a MenuItem> {
+/// Menu items matching `query`, best first (Photoshop order within a rank). Both the English
+/// labels and their `lang` translations match, so a search works in the UI language and in
+/// English; untranslated strings are simply their English text.
+pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::Lang) -> Vec<&'a MenuItem> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Vec::new();
     }
+    let rank = |it: &MenuItem| {
+        let english = search_rank(&q, &it.label, &it.path);
+        let path: Vec<String> = it.path.iter().map(|p| crate::i18n::tr(lang, p).to_string()).collect();
+        let local = search_rank(&q, crate::i18n::tr_id(lang, &it.id, &it.label), &path);
+        english.into_iter().chain(local).min()
+    };
     let mut hits: Vec<(u8, usize, &MenuItem)> =
-        items.iter().enumerate().filter(|(_, it)| it.label != "---").filter_map(|(i, it)| search_rank(&q, &it.label, &it.path).map(|r| (r, i, it))).collect();
+        items.iter().enumerate().filter(|(_, it)| it.label != "---").filter_map(|(i, it)| rank(it).map(|r| (r, i, it))).collect();
     hits.sort_by_key(|(r, i, _)| (*r, *i));
     let mut seen = std::collections::HashSet::new();
     hits.into_iter().filter(|(_, _, it)| seen.insert(it.id.as_str())).take(HELP_SEARCH_MAX).map(|(_, _, it)| it).collect()
@@ -933,7 +941,7 @@ fn help_search(ui: &mut egui::Ui, items: &[MenuItem], clicked: &mut Option<Strin
     if reopened {
         field.request_focus();
     }
-    let results = search_items(items, &query);
+    let results = search_items(items, &query, lang);
     if field.lost_focus()
         && ui.input(|i| i.key_pressed(egui::Key::Enter))
         && let Some(it) = results.iter().find(|it| it.enabled)
@@ -1201,7 +1209,7 @@ mod tests {
     fn help_search_finds_commands_by_any_word() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let items = menu_items(&app);
-        let ids = |q: &str| search_items(&items, q).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        let ids = |q: &str| search_items(&items, q, crate::i18n::Lang::EN).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
         let di = ids("DI");
         assert!(di.contains(&"edit.transform.distort".to_string()), "{di:?}");
         assert!(di.len() <= HELP_SEARCH_MAX);
@@ -1212,6 +1220,18 @@ mod tests {
         assert_eq!(search_rank("orm", "Transform Selection", &[]), Some(2));
         assert_eq!(search_rank("trans", "Distort", &["Edit".into(), "Transform".into()]), Some(3));
         assert!(ids("   ").is_empty());
+        assert!(ids("zzzzqqq").is_empty());
+    }
+
+    /// In another UI language both the translated and the English names match.
+    #[test]
+    fn help_search_matches_the_ui_language_and_english() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let items = menu_items(&app);
+        let Some(fr) = crate::i18n::Lang::from_code("fr") else { return };
+        let ids = |q: &str| search_items(&items, q, fr).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        assert!(!ids("calque").is_empty(), "French menu name");
+        assert!(ids("distort").contains(&"edit.transform.distort".to_string()), "English still matches");
         assert!(ids("zzzzqqq").is_empty());
     }
 
