@@ -354,7 +354,7 @@ pub struct SmartObject {
     /// Layer › Smart Objects › Stack Mode: when set, the source's top-level layers are combined
     /// per pixel with this statistic instead of composited.
     pub stack_mode: Option<StackMode>,
-    /// Distort / Perspective (or a Photoshop placement whose corners aren't a parallelogram): the
+    /// Distort / Perspective (or an imported placement whose corners aren't a parallelogram): the
     /// full projective map from source pixels to document pixels, row-major 3×3. It overrides
     /// `transform`, which then holds its affine approximation at the source origin.
     pub perspective: Option<[f64; 9]>,

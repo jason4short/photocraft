@@ -533,7 +533,7 @@ pub fn parse_smart(key: &[u8; 4], data: &[u8]) -> (String, Affine) {
 
 /// The projective placement of a `SoLd` / `SoLE` block whose corners aren't a parallelogram
 /// (Distort, Perspective): source pixels → document pixels, row-major 3×3. Read from
-/// `nonAffineTransform` (Photoshop's corners), else `Trnf`. `None` for affine placements, which
+/// `nonAffineTransform` (the placed corners), else `Trnf`. `None` for affine placements, which
 /// [`parse_smart`]'s affine holds exactly.
 pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
     if key != b"SoLd" && key != b"SoLE" {

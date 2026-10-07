@@ -901,6 +901,54 @@ mod tests {
         assert_eq!(d.get("Trnf"), tmpl.get("Trnf"));
     }
 
+    /// A Distort / Perspective placement goes out as its four corners (`Trnf`, `nonAffineTransform`)
+    /// and comes back as the same projective map; an affine one reads back as no perspective.
+    #[test]
+    fn perspective_placement_round_trips_through_sold() {
+        let h = photocraft_algo::transform::Homography::rect_to_quad([0.0, 0.0, 64.0, 32.0], [[10.0, 5.0], [80.0, 8.0], [70.0, 50.0], [12.0, 40.0]]).unwrap();
+        let mut w = Vec::new();
+        let mut spec = PlacedSpec {
+            idnt: "id",
+            placed: "pl",
+            transform: Affine::IDENTITY,
+            perspective: Some(h.0),
+            size: (64.0, 32.0),
+            dpi: 72.0,
+            warp: None,
+            filter_fx: None,
+        };
+        let sold = sold_bytes(None, &spec, &mut w);
+        let back = crate::blocks::parse_smart_perspective(b"SoLd", &sold).expect("a projective placement");
+        let n = |m: [f64; 9]| m.map(|v| v / m[8]);
+        for (a, b) in n(back).iter().zip(n(h.0)) {
+            assert!((a - b).abs() < 1e-9 * (1.0 + b.abs()), "{back:?} vs {:?}", h.0);
+        }
+        // Affine placements carry no perspective.
+        spec.perspective = None;
+        spec.transform = Affine { m: [2.0, 0.0, 0.0, 2.0, 5.0, 7.0] };
+        let sold = sold_bytes(None, &spec, &mut w);
+        assert_eq!(crate::blocks::parse_smart_perspective(b"SoLd", &sold), None);
+        assert_eq!(crate::blocks::parse_smart_perspective(b"PlLd", &sold), None);
+    }
+
+    /// `quad_moved` compares the corners a template stores with the placement's: unchanged keeps
+    /// the template's quad, a moved corner (affine or projective) or a missing quad rewrites it.
+    #[test]
+    fn quad_moved_detects_corner_changes() {
+        let t = Affine { m: [1.0, 0.0, 0.0, 1.0, 3.0, 4.0] };
+        let mut w = Vec::new();
+        let mut spec = PlacedSpec { idnt: "id", placed: "pl", transform: t, perspective: None, size: (20.0, 10.0), dpi: 72.0, warp: None, filter_fx: None };
+        let template = parse_sold(&sold_bytes(None, &spec, &mut w)).expect("parses").descriptor;
+        assert!(!quad_moved(&template, &spec), "same placement");
+        spec.transform = Affine { m: [1.0, 0.0, 0.0, 1.0, 3.5, 4.0] };
+        assert!(quad_moved(&template, &spec), "moved half a pixel");
+        spec.transform = t;
+        spec.perspective =
+            photocraft_algo::transform::Homography::rect_to_quad([0.0, 0.0, 20.0, 10.0], [[3.0, 4.0], [23.0, 4.0], [20.0, 12.0], [3.0, 14.0]]).map(|h| h.0);
+        assert!(quad_moved(&template, &spec), "one corner moved (Distort)");
+        assert!(quad_moved(&Descriptor::new("null"), &spec), "no stored quad");
+    }
+
     /// Corrupted placed-layer data and filter descriptors never panic: they parse to something
     /// (unknown filters stay verbatim) or to nothing.
     #[test]

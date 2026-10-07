@@ -555,3 +555,37 @@ fn distort_survives_edit_contents() {
     let c = sm.cache.as_ref().unwrap();
     assert_eq!(c.rgba(x1 - 2, y1 - 2)[3], 0.0, "no pixels where the corner used to be");
 }
+
+/// Warp handles on a distorted smart object sit on its four distorted corners (the warp is mapped
+/// through the full projective placement, not its affine approximation), and warping it keeps the
+/// Distort placement.
+#[test]
+fn warp_on_a_distorted_smart_object_follows_the_corners() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let r = active_smart(&s).cache.unwrap().content_bounds();
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    let quad = [[x0, y0], [x1, y0], [x1 - 12.0, y1 - 8.0], [x0, y1]];
+    s.execute("edit.transform", json!({"layer": id, "rect": [x0, y0, x1, y1], "quad": quad})).unwrap();
+    let mut sm = active_smart(&s);
+    let h = placement(&sm);
+    let inv = h.inverse().unwrap();
+    let src: Vec<(f64, f64)> = quad.iter().map(|p| inv.apply(p[0], p[1])).collect();
+    let b = src.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+    sm.warp = Some(photocraft_geom::warp::Warp::custom(photocraft_geom::warp::BezierMesh::identity(b, 1, 1), b));
+    let layer = Layer::new("w", LayerContent::Smart(sm));
+    let doc_warp = crate::warp_cmds::smart_warp_doc_space(&layer).unwrap();
+    let pts = doc_warp.mesh.unwrap().points;
+    for (q, i) in quad.iter().zip([0usize, 3, 15, 12]) {
+        let p = pts[i];
+        assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "corner {i}: {p:?} vs {q:?}");
+    }
+    // Warping the distorted smart object works and keeps its projective placement.
+    let before = active_smart(&s).perspective;
+    assert!(before.is_some());
+    s.execute("edit.transform.warp", json!({"style": "arc", "bend": 30})).unwrap();
+    let after = active_smart(&s);
+    assert!(after.warp.is_some());
+    assert_eq!(after.perspective, before);
+}
