@@ -2,13 +2,18 @@
 //! pointer (`layer.pickAt`), without switching to the Move tool. The whole press–drag–release is
 //! swallowed so the active tool never sees it; it runs before the ⌃⌥ brush-resize gesture, which
 //! would otherwise claim it.
+//!
+//! Platforms: the gesture is macOS-only, because ⌘ is the only key that tells it apart from the
+//! ⌃⌥ brush resize. egui never reports `mac_cmd` on Windows or Linux, so there it is a no-op and
+//! ⌃⌥-drag keeps resizing the brush; the Move tool's Auto-Select picks layers on every platform.
+//! A failed pick is shown as a status-bar error and never panics.
 
 use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
 
-/// ⌘ + ⌥ + ⌃ held together (macOS).
+/// ⌘ + ⌥ + ⌃ held together. Always false off macOS, where egui never sets `mac_cmd`.
 pub fn is_gesture(mods: egui::Modifiers) -> bool {
     mods.mac_cmd && mods.alt && mods.ctrl
 }
@@ -22,6 +27,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
             if let Err(e) = app.run("layer.pickAt", json!({"x": x, "y": y, "target": "layer", "mode": "replace"})) {
                 app.ui.status = e;
+                app.ui.status_error = true;
             }
             app.quick_pick = true;
             true
@@ -83,5 +89,28 @@ mod tests {
         let no_ctrl = Modifiers { ctrl: false, ..PICK };
         assert!(!pointer(&mut app, ToolEvent::Down { x: 12.0, y: 12.0, pressure: 1.0 }, no_ctrl));
         assert_ne!(app.session.active().unwrap().active_layer, Some(a));
+    }
+
+    /// Windows and Linux report Ctrl+Alt (+Shift) but never `mac_cmd`: the click falls through to
+    /// the tool and the ⌃⌥ brush resize instead of picking a layer.
+    #[test]
+    fn is_a_no_op_without_the_mac_command_key() {
+        let (mut app, a) = app();
+        app.ui.tool = Tool::Brush;
+        let pc = Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
+        for mods in [pc, Modifiers { shift: true, ..pc }] {
+            assert!(!pointer(&mut app, ToolEvent::Down { x: 12.0, y: 12.0, pressure: 1.0 }, mods));
+            assert!(!app.quick_pick);
+            assert_ne!(app.session.active().unwrap().active_layer, Some(a));
+        }
+    }
+
+    #[test]
+    fn a_failed_pick_is_a_status_error_and_swallows_the_click() {
+        let (mut app, _) = app();
+        // Far outside the canvas no layer has pixels: the pick fails gracefully.
+        assert!(pointer(&mut app, ToolEvent::Down { x: 1e9, y: -1e9, pressure: 1.0 }, PICK));
+        assert!(pointer(&mut app, ToolEvent::Up { x: 1e9, y: -1e9 }, PICK));
+        assert!(!app.quick_pick);
     }
 }
