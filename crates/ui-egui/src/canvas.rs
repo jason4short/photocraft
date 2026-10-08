@@ -4025,7 +4025,8 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 30}})).unwrap();
-        app.ui.tool = Tool::Dodge;
+        // Spot Healing: the dab tools draw their stroke live instead of a trail.
+        app.ui.tool = Tool::SpotHealing;
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         let mut pts = vec![[20.0, 30.0]];
         for i in 1..80 {
