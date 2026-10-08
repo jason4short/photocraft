@@ -2218,7 +2218,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
         {
             let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
+            let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
             app.press_stroke = app.drag.is_some();
         }
         let press_stroke = app.press_stroke;
