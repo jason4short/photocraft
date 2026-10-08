@@ -647,11 +647,7 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let parent = st.doc.id;
     // Already open for editing: switch to that document rather than opening another copy.
-    if let Some(index) = s
-        .smart_links
-        .iter()
-        .find(|l| l.parent == parent && l.layer == id)
-        .and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
+    if let Some(index) = s.smart_links.iter().find(|l| l.parent == parent && l.layer == id).and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
     {
         s.set_active(index);
         return Ok(json!({"document": index, "parentLayer": id.0}));
