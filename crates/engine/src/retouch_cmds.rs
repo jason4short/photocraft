@@ -343,7 +343,8 @@ impl LiveClone {
         // As `stroke_coverage`, which the commit uses.
         let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0);
         let opacity = stroke.brush.opacity;
-        let mut live = Self { doc: std::sync::Arc::new(doc), renderer, pre, pre_surf, id, params: p.clone(), which, map, mode, opacity, sel, lock, tail: Rect::EMPTY };
+        let mut live =
+            Self { doc: std::sync::Arc::new(doc), renderer, pre, pre_surf, id, params: p.clone(), which, map, mode, opacity, sel, lock, tail: Rect::EMPTY };
         live.push(&stroke.points)?;
         Ok(live)
     }
