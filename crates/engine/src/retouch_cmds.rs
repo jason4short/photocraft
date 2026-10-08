@@ -387,7 +387,7 @@ impl LiveClone {
         if r.is_empty() {
             return Ok(r);
         }
-        let paint = clone_sample(&self.pre, self.id, &self.pre_surf, self.which, r, &self.map);
+        let paint = clone_sample(&self.pre, self.id, &self.pre_surf, self.which, r, &self.map, "paint.cloneStamp")?;
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         surf.write_region(r, &self.pre_surf.read_region(r));
         Ok(apply_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode).union(&r))
