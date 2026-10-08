@@ -350,6 +350,32 @@ mod tests {
     }
 
     #[test]
+    fn alt_flips_dodge_burn_and_blur_sharpen() {
+        for (tool, flipped) in [(Tool::Dodge, Tool::Burn), (Tool::Burn, Tool::Dodge), (Tool::Blur, Tool::Sharpen), (Tool::Sharpen, Tool::Blur)] {
+            assert_eq!(alt_flipped(tool, true), flipped);
+            assert_eq!(alt_flipped(tool, false), tool);
+        }
+        for tool in [Tool::Sponge, Tool::Smudge, Tool::Brush] {
+            assert_eq!(alt_flipped(tool, true), tool, "{tool:?} has no ⌥ counterpart");
+        }
+    }
+
+    #[test]
+    fn alt_stroke_runs_the_opposite_tool() {
+        // ⌥ held as the stroke starts: Dodge burns, Burn dodges, Blur sharpens, Sharpen blurs.
+        for (tool, cmd) in [(Tool::Dodge, "paint.burn"), (Tool::Burn, "paint.dodge"), (Tool::Blur, "paint.sharpen"), (Tool::Sharpen, "paint.blur")] {
+            let mut app = app();
+            app.ui.tool = tool;
+            let m = egui::Modifiers::ALT;
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, m);
+            assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some(cmd), "{tool:?} with ⌥");
+            assert_eq!(app.ui.tool, tool, "the selected tool stays {tool:?}");
+        }
+    }
+
+    #[test]
     fn clone_without_a_source_names_the_platform_modifier() {
         // Option-click on the Mac, Alt-click elsewhere (#251).
         for tool in [Tool::CloneStamp, Tool::Healing] {
