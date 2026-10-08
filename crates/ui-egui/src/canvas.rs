@@ -2377,8 +2377,6 @@ fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket)
 }
 
-/// Decided when the press starts, so ⌥ pressed or released mid-stroke never switches between
-/// painting and sampling.
 /// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
 /// OS cursor to set (hidden).
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
@@ -2387,6 +2385,8 @@ pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     egui::CursorIcon::None
 }
 
+/// Decided when the press starts, so ⌥ pressed or released mid-stroke never switches between
+/// painting and sampling.
 fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     if matches!(ev, ToolEvent::Down { .. }) {
         app.alt_sampling = alt_samples(app.ui.tool, mods);
