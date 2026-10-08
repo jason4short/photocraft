@@ -240,8 +240,8 @@ pub(crate) fn draw_readout(ctx: &egui::Context, id: &str, cursor: Pos2, labels: 
 /// The engine's live stroke of a tool: the Brush, Pencil and Eraser paint dabs, the Clone Stamp
 /// composites its source.
 enum EngineStroke {
-    Brush(photocraft_engine::brush_cmds::LiveStroke),
-    Clone(photocraft_engine::retouch_cmds::LiveClone),
+    Brush(Box<photocraft_engine::brush_cmds::LiveStroke>),
+    Clone(Box<photocraft_engine::retouch_cmds::LiveClone>),
 }
 
 impl EngineStroke {
@@ -421,10 +421,10 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         let mut p = crate::retouch_ui::clone_params(app)?;
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
-        EngineStroke::Clone(photocraft_engine::retouch_cmds::LiveClone::begin(&app.session, &p).ok()?)
+        EngineStroke::Clone(Box::new(photocraft_engine::retouch_cmds::LiveClone::begin(&app.session, &p).ok()?))
     } else {
         let p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
-        EngineStroke::Brush(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?)
+        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
