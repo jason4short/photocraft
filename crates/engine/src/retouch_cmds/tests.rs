@@ -1132,3 +1132,35 @@ fn live_clone_matches_the_commit() {
         }
     }
 }
+
+/// The live Dodge shows what the commit paints, also where a stroke doubles back across the
+/// cells that remember each pixel's original colour (the live stroke edits one dab at a time).
+/// 32-bit, so the live working copy isn't quantised between dabs.
+#[test]
+fn live_dodge_matches_the_commit_across_cells() {
+    let mut s = session(200, 90, 32, "rgb");
+    paint_layer(&mut s, texture);
+    let all = [[10.0, 40.0], [100.0, 60.0], [180.0, 40.0], [60.0, 30.0], [150.0, 70.0]];
+    let pts = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
+    let opts = |p: &[[f64; 2]]| json!({"points": p, "size": 40, "hardness": 30, "exposure": 60, "range": "midtones"});
+    let mut live = LiveDab::begin(&s, "paint.dodge", &opts(&all[..1])).unwrap();
+    live.push(&pts(&all[1..3])).unwrap();
+    live.push(&pts(&all[3..])).unwrap();
+    let shown = live.doc.clone();
+    s.execute("paint.dodge", opts(&all)).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let (a, b) = (shown.layer(id).unwrap().surface().unwrap(), s.active().unwrap().doc.layer(id).unwrap().surface().unwrap());
+    let (mut changed, mut worst) = (false, 0.0f32);
+    for y in 0..90 {
+        for x in 0..200 {
+            let (got, want) = (a.rgba(x, y), b.rgba(x, y));
+            changed |= (want[0] - texture(x, y)[0]).abs() > 0.02;
+            // The commit also lays the stroke's last dab, which the live stroke shows on release.
+            if (x - 150).pow(2) + (y - 70).pow(2) > 25 * 25 {
+                worst = (0..4).map(|c| (got[c] - want[c]).abs()).fold(worst, f32::max);
+            }
+        }
+    }
+    assert!(changed);
+    assert!(worst <= 1e-4, "live and commit differ by {worst}");
+}
