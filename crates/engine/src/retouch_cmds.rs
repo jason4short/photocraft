@@ -333,7 +333,7 @@ impl LiveClone {
         let (stroke, id) = parse_brush(s, p, CMD)?;
         let which = sample_layers(p, CMD)?;
         let mode = blend_param(p, CMD)?;
-        let f = stroke.points[0];
+        let f = *stroke.points.first().ok_or_else(|| bad(CMD, "`points` is empty"))?;
         let (map, _) = crate::presets::clone_source::resolve(s, p, (f.x, f.y), CMD)?;
         let pre = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
         let mut doc = (*pre).clone();
