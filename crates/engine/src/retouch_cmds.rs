@@ -856,7 +856,7 @@ impl LiveDab {
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         self.renderer.push(pts);
         let ctx = self.renderer.ctx.clone();
-        let new: Vec<_> = self.renderer.dabs()[self.done..].to_vec();
+        let new: Vec<_> = self.renderer.dabs().get(self.done..).unwrap_or_default().to_vec();
         let mut dmg = Rect::EMPTY;
         for (k, d) in new.iter().enumerate() {
             let r = ctx.dab_rect(d, false);
